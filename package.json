@@ -2,7 +2,17 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "slides2pdf",
   "title": "Slides2pdf",
-  "description": "Convert pptx to pdf",
+  "description": "This command converts .pptx files into .pdf using LibreOffice in headless mode.",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/slides2pdf"
+  },
+  "homepage": "https://github.com/yourusername/slides2pdf",
+  "bugs": {
+    "url": "https://github.com/yourusername/slides2pdf/issues"
+  },
+  "keywords": ["raycast", "pptx", "pdf", "libreoffice", "conversion"],
   "icon": "extension-icon.png",
   "author": "robert_hofmann",
   "owner": "bertro",
@@ -19,8 +29,36 @@
       "name": "convert-to-pdf",
       "title": "Convert to PDF",
       "subtitle": "From Powerpoint",
-      "description": "",
+      "description": "Convert a PowerPoint (.pptx) file into a PDF document.",
+  "mode": "no-view"
+    }
+    ,
+    {
+      "name": "check-soffice",
+      "title": "Check LibreOffice",
+      "subtitle": "Verify soffice is available",
+      "description": "Run soffice --version to verify LibreOffice is installed and on PATH.",
       "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "openAfterConvertSingle",
+      "type": "checkbox",
+      "title": "Open when single file converted",
+      "label": "Open after single convert",
+      "description": "Open the generated PDF immediately when converting a single selected file.",
+      "required": false,
+      "default": false
+    },
+    {
+      "name": "openAfterConvertBatch",
+      "type": "checkbox",
+      "title": "Open when multiple files converted",
+      "label": "Open after batch convert",
+      "description": "Open all generated PDFs after converting multiple selected files (after all conversions finish).",
+      "required": false,
+      "default": false
     }
   ],
   "dependencies": {
