@@ -36,7 +36,15 @@
       "description": "Convert a PowerPoint (.pptx) file into a PDF document.",
       "mode": "no-view"
     }
-  ],
+  ,
+    {
+      "name": "install-libreoffice",
+      "title": "Install LibreOffice",
+      "subtitle": "Guide",
+      "description": "Step-by-Steps Guide to help you install LibreOffice",
+      "mode": "view"
+    }
+      ],
   "preferences": [
     {
       "name": "openAfterConvertSingle",
