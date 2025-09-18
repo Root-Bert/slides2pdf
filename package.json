@@ -12,13 +12,17 @@
   "bugs": {
     "url": "https://github.com/yourusername/slides2pdf/issues"
   },
-  "keywords": ["raycast", "pptx", "pdf", "libreoffice", "conversion"],
+  "keywords": [
+    "raycast",
+    "pptx",
+    "pdf",
+    "libreoffice",
+    "conversion"
+  ],
   "icon": "extension-icon.png",
   "author": "robert_hofmann",
-  "owner": "bertro",
   "platforms": [
-    "macOS",
-    "Windows"
+    "macOS"
   ],
   "categories": [
     "Productivity"
@@ -30,14 +34,6 @@
       "title": "Convert to PDF",
       "subtitle": "From Powerpoint",
       "description": "Convert a PowerPoint (.pptx) file into a PDF document.",
-  "mode": "no-view"
-    }
-    ,
-    {
-      "name": "check-soffice",
-      "title": "Check LibreOffice",
-      "subtitle": "Verify soffice is available",
-      "description": "Run soffice --version to verify LibreOffice is installed and on PATH.",
       "mode": "no-view"
     }
   ],
@@ -63,7 +59,9 @@
   ],
   "dependencies": {
     "@raycast/api": "^1.103.1",
-    "@raycast/utils": "^1.17.0"
+    "@raycast/utils": "^1.17.0",
+    "nanoid": "^5.1.5",
+    "react": "^19.1.1"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^2.0.4",
