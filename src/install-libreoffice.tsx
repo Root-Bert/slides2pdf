@@ -1,10 +1,7 @@
-import { ActionPanel, Action, Icon, List, Form, showToast, Toast } from "@raycast/api";
+import { ActionPanel, Action, Icon, List, showToast, Toast } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
-import { useEffect, useState } from "react";
-import fs from "fs";
-import { exec, execFile, execFileSync, spawn } from "child_process";
-import path from "path";
-import os from "os";
+import { useEffect } from "react";
+import { exec, execFileSync } from "child_process";
 
 interface Todo {
   id: string;
@@ -86,7 +83,7 @@ export default function Command() {
     if (id === "1") {
       if (!items.find((t) => t.id === "1")?.isCompleted) {
         goToBrew();
-      }else {
+      } else {
         showToast({ title: "Homebrew already installed", style: Toast.Style.Success });
       }
       return;
