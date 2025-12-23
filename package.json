@@ -6,11 +6,11 @@
   "version": "0.1.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/slides2pdf"
+    "url": "https://github.com/Root-Bert/slides2pdf"
   },
-  "homepage": "https://github.com/yourusername/slides2pdf",
+  "homepage": "https://github.com/Root-Bert/slides2pdf",
   "bugs": {
-    "url": "https://github.com/yourusername/slides2pdf/issues"
+    "url": "https://github.com/Root-Bert/slides2pdf/issues"
   },
   "keywords": [
     "raycast",
@@ -35,8 +35,7 @@
       "subtitle": "From Powerpoint",
       "description": "Convert a PowerPoint (.pptx) file into a PDF document.",
       "mode": "no-view"
-    }
-  ,
+    },
     {
       "name": "install-libreoffice",
       "title": "Install LibreOffice",
@@ -44,7 +43,7 @@
       "description": "Step-by-Steps Guide to help you install LibreOffice",
       "mode": "view"
     }
-      ],
+  ],
   "preferences": [
     {
       "name": "openAfterConvertSingle",

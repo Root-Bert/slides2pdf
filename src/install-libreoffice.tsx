@@ -1,45 +1,113 @@
-import { ActionPanel, Action, Icon, List } from "@raycast/api";
+import { ActionPanel, Action, Icon, List, Form, showToast, Toast } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
+import { useEffect, useState } from "react";
+import fs from "fs";
+import { exec, execFile, execFileSync, spawn } from "child_process";
+import path from "path";
+import os from "os";
 
 interface Todo {
   id: string;
   title: string;
+  subtitle?: string;
   isCompleted: boolean;
 }
 
 function defaultItems(): Todo[] {
   return [
-    { id: "1", title: "Install brew", isCompleted: false },
+    { id: "1", title: "Install Homebrew", isCompleted: false },
     { id: "2", title: "Install LibreOffice", isCompleted: false },
     { id: "3", title: "Convert your first Slides to PDF!", isCompleted: false },
   ];
 }
 
+function findBrew(): string {
+  try {
+    const out = execFileSync("/bin/zsh", ["-lc", "command -v brew"], {
+      encoding: "utf8",
+      timeout: 1000,
+    }).trim();
+    if (out) {
+      showToast({ title: `Found brew at ${out}`, style: Toast.Style.Success });
+      return out;
+    }
+  } catch {
+    // ignore
+  }
+
+  return "";
+}
+
+function findLibreOfficePath(): string | null {
+  try {
+    const out = execFileSync("/bin/zsh", ["-lc", "command -v soffice"], {
+      encoding: "utf8",
+      timeout: 1000,
+    }).trim();
+    if (out) {
+      showToast({ title: `Found LibreOffice at ${out}`, style: Toast.Style.Success });
+      return out;
+    }
+  } catch {
+    // ignore
+  }
+
+  return "";
+}
+
+async function goToBrew() {
+  exec("open https://brew.sh");
+}
+
 export default function Command() {
   const [items, setItems] = useCachedState<Todo[]>("todos", defaultItems());
 
-  const completed = items.filter((t) => t.isCompleted).length;
-  const pct = items.length ? completed / items.length : 0;
+  // inital checks
+  useEffect(() => {
+    (async () => {
+      const brewPath = await findBrew();
+      if (brewPath) {
+        setItems((prev) =>
+          prev.map((t) => (t.id === "1" ? { ...t, isCompleted: true, subtitle: `Found Homebrew at ${brewPath}` } : t)),
+        );
+        const libreOfficePath = await findLibreOfficePath();
+        if (libreOfficePath) {
+          setItems((prev) =>
+            prev.map((t) =>
+              t.id === "2" ? { ...t, isCompleted: true, subtitle: `Found LibreOffice at ${libreOfficePath}` } : t,
+            ),
+          );
+        }
+      }
+    })();
+  }, []);
 
-  function toggle(id: string) {
-    setItems((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isCompleted: !t.isCompleted } : t))
-    );
+  async function toggle(id: string) {
+    if (id === "1") {
+      if (!items.find((t) => t.id === "1")?.isCompleted) {
+        goToBrew();
+      }else {
+        showToast({ title: "Homebrew already installed", style: Toast.Style.Success });
+      }
+      return;
+    }
+    // default toggle for manual tasks
+    setItems((prev) => prev.map((t) => (t.id === id ? { ...t, isCompleted: !t.isCompleted } : t)));
   }
 
   return (
     <List>
-      {/* Todos */}
       {items.map((todo) => (
         <List.Item
           key={todo.id}
           title={todo.title}
+          subtitle={todo.subtitle}
           accessories={[{ icon: todo.isCompleted ? Icon.Checkmark : Icon.Circle }]}
           actions={
             <ActionPanel>
               <Action
                 icon={todo.isCompleted ? Icon.Circle : Icon.Checkmark}
-                title={todo.isCompleted ? "Uncomplete Todo" : "Complete Todo"}
+                title={todo.isCompleted ? "" : todo.title}
                 onAction={() => toggle(todo.id)}
               />
             </ActionPanel>
