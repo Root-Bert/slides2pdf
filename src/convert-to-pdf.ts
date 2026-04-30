@@ -1,7 +1,17 @@
-import { showToast, Toast, getSelectedFinderItems, open, getPreferenceValues, closeMainWindow } from "@raycast/api";
-import { execFileSync, spawnSync } from "child_process";
+import {
+  showToast,
+  Toast,
+  getSelectedFinderItems,
+  open,
+  getPreferenceValues,
+  closeMainWindow,
+  launchCommand,
+  LaunchType,
+} from "@raycast/api";
 import path from "path";
 import fs from "fs";
+import { LocalStorage } from "@raycast/api";
+import { detectBackends, selectBackendForFile, convertFile, fileCategory } from "./utils/backends";
 
 export default async function Command() {
   const selected = await getSelectedFinderItems();
@@ -11,16 +21,12 @@ export default async function Command() {
     return;
   }
 
-  // Close the Raycast window immediately so conversion continues in background.
-  // This makes the command feel non-blocking for the user.
   try {
     closeMainWindow();
   } catch {
-    // ignore if unavailable
+    // ignore
   }
 
-  // Read preference: openAfterConvert (checkbox)
-  // Prefer a typed preference shape: Raycast returns checkbox preferences as boolean.
   const prefs = getPreferenceValues<{
     openAfterConvertSingle?: boolean | string;
     openAfterConvertBatch?: boolean | string;
@@ -29,82 +35,76 @@ export default async function Command() {
   const openAfterConvertSingle = prefs.openAfterConvertSingle === true || prefs.openAfterConvertSingle === "true";
   const openAfterConvertBatch = prefs.openAfterConvertBatch === true || prefs.openAfterConvertBatch === "true";
 
-  // Try to locate soffice: prefer PATH via `which`, fallback to common macOS/homebrew locations.
-  const which = spawnSync("which", ["soffice"]);
-  let sofficePath: string | null = null;
-  if (which.status === 0) {
-    const p = String(which.stdout).trim();
-    if (p) {
-      sofficePath = p;
+  const [pp, pd, ps] = await Promise.all([
+    LocalStorage.getItem<string>("preferredPresentation"),
+    LocalStorage.getItem<string>("preferredDocument"),
+    LocalStorage.getItem<string>("preferredSpreadsheet"),
+  ]);
+  const preferredByCategory: Record<string, string> = {
+    presentation: pp ?? "auto",
+    document:     pd ?? "auto",
+    spreadsheet:  ps ?? "auto",
+    other:        "auto",
+  };
+
+  const available = detectBackends();
+
+  if (available.length === 0) {
+    await showToast(Toast.Style.Failure, "No conversion engine found", "Opening setup guide…");
+    try {
+      await launchCommand({ name: "intro2pdf", type: LaunchType.UserInitiated });
+    } catch {
+      // ignore
     }
-  }
-
-  const commonPaths = [
-    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-    "/usr/local/bin/soffice",
-    "/opt/homebrew/bin/soffice",
-  ];
-
-  for (const p of commonPaths) {
-    if (!sofficePath && fs.existsSync(p)) {
-      sofficePath = p;
-    }
-  }
-
-  if (!sofficePath) {
-    await showToast(
-      Toast.Style.Failure,
-      "LibreOffice (soffice) not found",
-      "Install LibreOffice or ensure 'soffice' is available in PATH.",
-    );
     return;
   }
 
   const producedFiles: string[] = [];
+  const errors: { base: string; message: string }[] = [];
   const total = selected.length;
+
   for (const item of selected) {
     const src = path.resolve(item.path);
     const ext = path.extname(src);
     const base = path.basename(src, ext);
-    const outdir = path.dirname(src);
-    const produced = path.join(outdir, `${base}.pdf`);
+    const outputPath = path.join(path.dirname(src), `${base}.pdf`);
 
-    // show current file as part of progress updates after conversion
+    const backend = selectBackendForFile(preferredByCategory[fileCategory(ext)], available, ext);
+
+    if (!backend) {
+      const msg = `No engine supports ${ext} files — install LibreOffice for full format support.`;
+      console.error(`[slides2pdf] ${msg}`);
+      errors.push({ base, message: msg });
+      continue;
+    }
+
     try {
-      // compute progress and show animated toast with percentage
-      const completed = producedFiles.length;
-      try {
-        await showToast(Toast.Style.Animated, `Converting ${base} - ${completed}/${total}`);
-      } catch {
-        // ignore
+      await showToast(Toast.Style.Animated, `Converting ${base} via ${backend.label} — ${producedFiles.length}/${total}`);
+      console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
+
+      convertFile(backend, src, outputPath);
+
+      if (!fs.existsSync(outputPath)) {
+        const nearby = fs.readdirSync(path.dirname(outputPath)).filter((f) => f.startsWith(base));
+        console.log(`[slides2pdf] Expected: ${outputPath}`);
+        console.log(`[slides2pdf] Files matching "${base}" in output dir:`, nearby);
+        throw new Error("Output file not found after conversion: " + outputPath);
       }
 
-      // Call the located soffice binary with args to avoid shell quoting issues
-      execFileSync(sofficePath, ["--headless", "--convert-to", "pdf", "--outdir", outdir, src], {
-        stdio: "ignore",
-      });
+      producedFiles.push(outputPath);
 
-      // Check produced file
-      if (!fs.existsSync(produced)) {
-        throw new Error("Expected output not found: " + produced);
-      }
-
-      producedFiles.push(produced);
-
-      // Open immediately only when single file selected and preference enabled
       if (selected.length === 1 && openAfterConvertSingle) {
-        await open(produced);
+        await open(outputPath);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await showToast(Toast.Style.Failure, "Conversion failed", message);
+      console.error(`[slides2pdf] Failed to convert "${base}":`, message);
+      errors.push({ base, message });
     }
   }
 
-  // If multiple files were converted and the batch preference is enabled, open them now
   if (selected.length > 1 && openAfterConvertBatch && producedFiles.length > 0) {
     for (const f of producedFiles) {
-      // fire-and-forget open; if one fails it shouldn't stop the others
       try {
         await open(f);
       } catch {
@@ -113,16 +113,18 @@ export default async function Command() {
     }
   }
 
-  // Final summary toast
-  try {
-    if (producedFiles.length === 0) {
-      await showToast(Toast.Style.Failure, "No files converted", "No output files were produced.");
-    } else if (producedFiles.length === 1) {
-      await showToast(Toast.Style.Success, "Converted 1 file", path.basename(producedFiles[0]));
-    } else {
-      await showToast(Toast.Style.Success, "Converted files", `${producedFiles.length} files converted`);
-    }
-  } catch {
-    // ignore
+  if (errors.length > 0 && producedFiles.length === 0) {
+    const firstError = errors[0];
+    await showToast(Toast.Style.Failure, `Failed: "${firstError.base}"`, firstError.message);
+  } else if (errors.length > 0) {
+    await showToast(
+      Toast.Style.Failure,
+      `${errors.length} file(s) failed`,
+      errors.map((e) => e.base).join(", "),
+    );
+  } else if (producedFiles.length === 1) {
+    await showToast(Toast.Style.Success, "Converted", path.basename(producedFiles[0]));
+  } else {
+    await showToast(Toast.Style.Success, "Converted", `${producedFiles.length} files`);
   }
 }
