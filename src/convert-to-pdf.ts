@@ -7,10 +7,10 @@ import {
   closeMainWindow,
   launchCommand,
   LaunchType,
+  LocalStorage,
 } from "@raycast/api";
 import path from "path";
 import fs from "fs";
-import { LocalStorage } from "@raycast/api";
 import { detectBackends, selectBackendForFile, convertFile, fileCategory } from "./utils/backends";
 
 export default async function Command() {
@@ -35,16 +35,18 @@ export default async function Command() {
   const openAfterConvertSingle = prefs.openAfterConvertSingle === true || prefs.openAfterConvertSingle === "true";
   const openAfterConvertBatch = prefs.openAfterConvertBatch === true || prefs.openAfterConvertBatch === "true";
 
-  const [pp, pd, ps] = await Promise.all([
+  const [pp, pd, ps, pi] = await Promise.all([
     LocalStorage.getItem<string>("preferredPresentation"),
     LocalStorage.getItem<string>("preferredDocument"),
     LocalStorage.getItem<string>("preferredSpreadsheet"),
+    LocalStorage.getItem<string>("preferredImage"),
   ]);
   const preferredByCategory: Record<string, string> = {
     presentation: pp ?? "auto",
-    document:     pd ?? "auto",
-    spreadsheet:  ps ?? "auto",
-    other:        "auto",
+    document: pd ?? "auto",
+    spreadsheet: ps ?? "auto",
+    image: pi ?? "auto",
+    other: "auto",
   };
 
   const available = detectBackends();
@@ -79,7 +81,10 @@ export default async function Command() {
     }
 
     try {
-      await showToast(Toast.Style.Animated, `Converting ${base} via ${backend.label} — ${producedFiles.length}/${total}`);
+      await showToast(
+        Toast.Style.Animated,
+        `Converting ${base} via ${backend.label} — ${producedFiles.length}/${total}`,
+      );
       console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
 
       convertFile(backend, src, outputPath);
@@ -117,11 +122,7 @@ export default async function Command() {
     const firstError = errors[0];
     await showToast(Toast.Style.Failure, `Failed: "${firstError.base}"`, firstError.message);
   } else if (errors.length > 0) {
-    await showToast(
-      Toast.Style.Failure,
-      `${errors.length} file(s) failed`,
-      errors.map((e) => e.base).join(", "),
-    );
+    await showToast(Toast.Style.Failure, `${errors.length} file(s) failed`, errors.map((e) => e.base).join(", "));
   } else if (producedFiles.length === 1) {
     await showToast(Toast.Style.Success, "Converted", path.basename(producedFiles[0]));
   } else {
