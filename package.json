@@ -21,6 +21,7 @@
   ],
   "icon": "extension-icon.png",
   "author": "robert_hofmann",
+  "owner": "bertro",
   "platforms": [
     "macOS"
   ],
