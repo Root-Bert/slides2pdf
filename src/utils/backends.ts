@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 export type BackendType = "keynote" | "powerpoint" | "pages" | "word" | "numbers" | "excel" | "libreoffice" | "sips";
@@ -19,25 +20,48 @@ const SPREADSHEET_EXTS = new Set([".xlsx", ".xls", ".numbers", ".ods", ".csv"]);
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".tiff", ".tif", ".bmp", ".heic", ".webp"]);
 
 // Per-backend: which extensions can it actually open?
-// Apple apps open their native format + MS formats; MS apps don't open Apple formats
+// iWork apps open their native format + MS formats but not ODF; MS apps open ODF but not iWork formats;
+// LibreOffice opens everything except iWork formats.
+const APPLE_NATIVE_EXTS = new Set([".key", ".pages", ".numbers"]);
 const BACKEND_EXTS: Record<BackendType, Set<string>> = {
-  keynote: PRESENTATION_EXTS,
+  keynote: new Set([".key", ".pptx", ".ppt"]),
   powerpoint: new Set([".pptx", ".ppt", ".pps", ".ppsx", ".odp"]),
-  pages: DOCUMENT_EXTS,
+  pages: new Set([".pages", ".docx", ".doc", ".rtf", ".txt"]),
   word: new Set([".docx", ".doc", ".odt", ".rtf", ".txt"]),
-  numbers: SPREADSHEET_EXTS,
+  numbers: new Set([".numbers", ".xlsx", ".xls", ".csv"]),
   excel: new Set([".xlsx", ".xls", ".ods", ".csv"]),
-  libreoffice: new Set([...PRESENTATION_EXTS, ...DOCUMENT_EXTS, ...SPREADSHEET_EXTS, ...IMAGE_EXTS]),
+  libreoffice: new Set(
+    [...PRESENTATION_EXTS, ...DOCUMENT_EXTS, ...SPREADSHEET_EXTS, ...IMAGE_EXTS].filter(
+      (e) => !APPLE_NATIVE_EXTS.has(e),
+    ),
+  ),
   sips: IMAGE_EXTS,
 };
 
-// Priority order per file category
+// Priority order per file category (fallback when no per-extension order applies)
 const PRIORITY: Record<FileCategory, BackendType[]> = {
-  presentation: ["keynote", "powerpoint", "libreoffice"],
-  document: ["pages", "word", "libreoffice"],
-  spreadsheet: ["numbers", "excel", "libreoffice"],
+  presentation: ["powerpoint", "keynote", "libreoffice"],
+  document: ["word", "pages", "libreoffice"],
+  spreadsheet: ["excel", "numbers", "libreoffice"],
   image: ["sips", "libreoffice"],
   other: ["libreoffice"],
+};
+
+// The app whose native format a file is in renders it most faithfully, so it goes first:
+// MS formats → MS app, iWork formats → iWork app, ODF → LibreOffice.
+const EXT_PRIORITY: Record<string, BackendType[]> = {
+  ".pptx": ["powerpoint", "keynote", "libreoffice"],
+  ".ppt": ["powerpoint", "keynote", "libreoffice"],
+  ".key": ["keynote"],
+  ".odp": ["libreoffice", "powerpoint"],
+  ".docx": ["word", "pages", "libreoffice"],
+  ".doc": ["word", "pages", "libreoffice"],
+  ".pages": ["pages"],
+  ".odt": ["libreoffice", "word"],
+  ".xlsx": ["excel", "numbers", "libreoffice"],
+  ".xls": ["excel", "numbers", "libreoffice"],
+  ".numbers": ["numbers"],
+  ".ods": ["libreoffice", "excel"],
 };
 
 const SOFFICE_BINS = [
@@ -55,7 +79,7 @@ const APP_SEARCH_DIRS = [
 
 // Each backend lists every bundle name it might appear under.
 // "Creator Studio" variants are App Store editions sold under a different bundle name.
-type AppBackendType = "keynote" | "powerpoint" | "pages" | "word" | "numbers" | "excel";
+export type AppBackendType = "keynote" | "powerpoint" | "pages" | "word" | "numbers" | "excel";
 const APP_CANDIDATES: Record<AppBackendType, string[]> = {
   keynote: ["Keynote", "Keynote Creator Studio"],
   powerpoint: ["Microsoft PowerPoint", "Microsoft PowerPoint Creator Studio"],
@@ -118,24 +142,37 @@ export function supportsExtension(type: BackendType, ext: string): boolean {
   return BACKEND_EXTS[type].has(ext.toLowerCase());
 }
 
-export function selectBackendForFile(preferred: string, available: Backend[], ext: string): Backend | null {
+// All capable backends for a file, best first: explicit preference, then category priority,
+// then anything else capable. Callers try them in order so a flaky native app falls back
+// to the next engine (usually LibreOffice) instead of failing the file.
+export function rankBackendsForFile(preferred: string, available: Backend[], ext: string): Backend[] {
   const capable = available.filter((b) => supportsExtension(b.type, ext));
-  if (capable.length === 0) return null;
+  const ranked: Backend[] = [];
+  const push = (b: Backend | undefined) => {
+    if (b && !ranked.includes(b)) ranked.push(b);
+  };
   if (preferred !== "auto") {
-    const match = capable.find((b) => b.type === preferred);
-    if (match) return match;
+    push(capable.find((b) => b.type === preferred));
   }
-  for (const type of PRIORITY[fileCategory(ext)]) {
-    const match = capable.find((b) => b.type === type);
-    if (match) return match;
+  for (const type of EXT_PRIORITY[ext.toLowerCase()] ?? PRIORITY[fileCategory(ext)]) {
+    push(capable.find((b) => b.type === type));
   }
-  return capable[0];
+  for (const b of capable) push(b);
+  return ranked;
+}
+
+export function selectBackendForFile(preferred: string, available: Backend[], ext: string): Backend | null {
+  return rankBackendsForFile(preferred, available, ext)[0] ?? null;
 }
 
 function runAppleScript(script: string, tag: string): void {
   console.log(`[slides2pdf:${tag}] script:\n${script}`);
   try {
-    const stdout = execFileSync("osascript", ["-e", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = execFileSync("osascript", ["-e", script], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 660000,
+    });
     if (stdout.trim()) console.log(`[slides2pdf:${tag}] stdout:`, stdout.trim());
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string; message?: string };
@@ -144,75 +181,98 @@ function runAppleScript(script: string, tag: string): void {
   }
 }
 
-// Apple iWork apps: export as PDF. exportProps is app-specific (only Keynote supports PDF image quality).
-// try/end try around export ensures close+quit always runs even if export fails.
+// Shared AppleScript skeleton. All app scripts follow the same shape:
+// remember whether the app was running, open the file, wait until the document actually appears
+// (open is asynchronous for non-native formats like .pptx in Keynote), run the export inside
+// try/on error so the error message is captured instead of swallowed, always close the document
+// and quit the app if we launched it, then re-raise the captured error outside the tell block.
+function conversionScript(opts: {
+  appName: string;
+  src: string;
+  outputPath: string;
+  countExpr: string; // e.g. "documents", "presentations", "workbooks"
+  docExpr: string; // e.g. "front document", "active presentation"
+  exportLine: string; // must reference theDoc and outFile
+}): string {
+  const { appName, src, outputPath, countExpr, docExpr, exportLine } = opts;
+  return [
+    `set wasRunning to (application "${appName}" is running)`,
+    `set errMsg to ""`,
+    `tell application "${appName}"`,
+    `  try`,
+    `    with timeout of 600 seconds`,
+    `      set initialCount to (count of ${countExpr})`,
+    `      open POSIX file ${JSON.stringify(src)}`,
+    `      set tries to 0`,
+    `      repeat while (count of ${countExpr}) is less than or equal to initialCount`,
+    `        delay 0.5`,
+    `        set tries to tries + 1`,
+    `        if tries > 120 then error "Timed out waiting for ${appName} to open the file"`,
+    `      end repeat`,
+    `      set theDoc to ${docExpr}`,
+    `      set outFile to POSIX file ${JSON.stringify(outputPath)}`,
+    `      ${exportLine}`,
+    `      close theDoc saving no`,
+    `    end timeout`,
+    `  on error eMsg`,
+    `    set errMsg to eMsg`,
+    `    try`,
+    `      close theDoc saving no`,
+    `    end try`,
+    `  end try`,
+    `  try`,
+    `    if not wasRunning then quit`,
+    `  end try`,
+    `end tell`,
+    `if errMsg is not "" then error errMsg`,
+  ].join("\n");
+}
+
+// iWork apps: export as PDF. exportProps is app-specific (only Keynote supports PDF image quality).
 function appleAppScript(appName: string, src: string, outputPath: string, exportProps?: string): string {
   const withProps = exportProps ? ` with properties {${exportProps}}` : "";
-  return [
-    `set wasRunning to (application "${appName}" is running)`,
-    `tell application "${appName}"`,
-    `  set theDoc to open POSIX file ${JSON.stringify(src)}`,
-    `  try`,
-    `    export theDoc to POSIX file ${JSON.stringify(outputPath)} as PDF${withProps}`,
-    `  end try`,
-    `  try`,
-    `    close theDoc saving no`,
-    `  end try`,
-    `  if not wasRunning then quit`,
-    `end tell`,
-  ].join("\n");
+  return conversionScript({
+    appName,
+    src,
+    outputPath,
+    countExpr: "documents",
+    docExpr: "front document",
+    exportLine: `export theDoc to outFile as PDF${withProps}`,
+  });
 }
 
-// PowerPoint: save theDoc in outFile as save as PDF (output must be POSIX file object, not plain string)
 function powerpointScript(appName: string, src: string, outputPath: string): string {
-  return [
-    `set wasRunning to (application "${appName}" is running)`,
-    `tell application "${appName}"`,
-    `  open POSIX file ${JSON.stringify(src)}`,
-    `  set tries to 0`,
-    `  repeat while (count of presentations) is 0`,
-    `    delay 0.5`,
-    `    set tries to tries + 1`,
-    `    if tries > 20 then error "Timed out waiting for ${appName} to open the file"`,
-    `  end repeat`,
-    `  set theDoc to presentation 1`,
-    `  set outFile to POSIX file ${JSON.stringify(outputPath)}`,
-    `  try`,
-    `    save theDoc in outFile as save as PDF`,
-    `  end try`,
-    `  try`,
-    `    close theDoc saving no`,
-    `  end try`,
-    `  if not wasRunning then quit`,
-    `end tell`,
-  ].join("\n");
+  return conversionScript({
+    appName,
+    src,
+    outputPath,
+    countExpr: "presentations",
+    docExpr: "active presentation",
+    exportLine: `save theDoc in outFile as save as PDF`,
+  });
 }
 
-// Word and Excel: save as theDoc file name outFile file format format PDF
-// collection = "documents" (Word) or "workbooks" (Excel)
-function wordExcelScript(appName: string, collection: string, src: string, outputPath: string): string {
-  const docRef = collection.replace(/s$/, "") + " 1";
-  return [
-    `set wasRunning to (application "${appName}" is running)`,
-    `tell application "${appName}"`,
-    `  open POSIX file ${JSON.stringify(src)}`,
-    `  set tries to 0`,
-    `  repeat while (count of ${collection}) is 0`,
-    `    delay 0.5`,
-    `    set tries to tries + 1`,
-    `    if tries > 20 then error "Timed out waiting for ${appName} to open the file"`,
-    `  end repeat`,
-    `  set theDoc to ${docRef}`,
-    `  set outFile to POSIX file ${JSON.stringify(outputPath)}`,
-    `  try`,
-    `    save as theDoc file name outFile file format format PDF`,
-    `  end try`,
-    `  try`,
-    `    close theDoc saving no`,
-    `  end try`,
-    `  if not wasRunning then quit`,
-    `end tell`,
-  ].join("\n");
+function wordScript(appName: string, src: string, outputPath: string): string {
+  return conversionScript({
+    appName,
+    src,
+    outputPath,
+    countExpr: "documents",
+    docExpr: "active document",
+    exportLine: `save as theDoc file name outFile file format format PDF`,
+  });
+}
+
+// Excel's dictionary differs from Word's: "save workbook as ... filename ... file format PDF file format"
+function excelScript(appName: string, src: string, outputPath: string): string {
+  return conversionScript({
+    appName,
+    src,
+    outputPath,
+    countExpr: "workbooks",
+    docExpr: "active workbook",
+    exportLine: `save workbook as theDoc filename outFile file format PDF file format`,
+  });
 }
 
 type AppleScriptBuilder = (appName: string, src: string, outputPath: string) => string;
@@ -222,24 +282,106 @@ const APPLE_SCRIPT_BUILDERS: Record<AppBackendType, AppleScriptBuilder> = {
   pages: appleAppScript,
   numbers: appleAppScript,
   powerpoint: powerpointScript,
-  word: (app, src, out) => wordExcelScript(app, "documents", src, out),
-  excel: (app, src, out) => wordExcelScript(app, "workbooks", src, out),
+  word: wordScript,
+  excel: excelScript,
 };
+
+// Exposed for syntax-checking the generated scripts without running a conversion.
+export function buildAppleScriptForType(type: AppBackendType, appName: string, src: string, outputPath: string) {
+  return APPLE_SCRIPT_BUILDERS[type](appName, src, outputPath);
+}
+
+// Microsoft Office apps are sandboxed: writing a PDF to an arbitrary folder (Desktop, Documents, …)
+// via AppleScript silently fails or throws a permission error. Writing inside the app's own
+// container always works, so we export there and move the result into place afterwards.
+const OFFICE_CONTAINER_IDS: Partial<Record<BackendType, string>> = {
+  powerpoint: "com.microsoft.Powerpoint",
+  word: "com.microsoft.Word",
+  excel: "com.microsoft.Excel",
+};
+
+function sandboxSafeOutputPath(type: BackendType): string | null {
+  const id = OFFICE_CONTAINER_IDS[type];
+  if (!id || !process.env.HOME) return null;
+  const dataDir = path.join(process.env.HOME, "Library", "Containers", id, "Data");
+  if (!fs.existsSync(dataDir)) return null;
+  return path.join(dataDir, `slides2pdf-${process.pid}-${Date.now()}.pdf`);
+}
+
+function moveFile(from: string, to: string): void {
+  try {
+    fs.renameSync(from, to);
+  } catch {
+    fs.copyFileSync(from, to);
+    fs.rmSync(from, { force: true });
+  }
+}
 
 export function convertFile(backend: Backend, src: string, outputPath: string): void {
   if (backend.type === "libreoffice") {
-    execFileSync(backend.path, ["--headless", "--convert-to", "pdf", "--outdir", path.dirname(outputPath), src], {
-      stdio: "ignore",
-    });
+    // Isolated user profile: --convert-to silently produces nothing when another LibreOffice
+    // instance (e.g. the GUI) holds the default profile lock.
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "slides2pdf-lo-"));
+    try {
+      execFileSync(
+        backend.path,
+        [
+          "--headless",
+          `-env:UserInstallation=file://${profileDir}`,
+          "--convert-to",
+          "pdf",
+          "--outdir",
+          path.dirname(outputPath),
+          src,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600000 },
+      );
+    } catch (e) {
+      const err = e as { stderr?: string; message?: string };
+      throw new Error(err.stderr?.toString().trim() || err.message || String(e));
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    }
     return;
   }
 
   if (backend.type === "sips") {
-    execFileSync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], { stdio: "ignore" });
+    execFileSync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], {
+      stdio: "ignore",
+      timeout: 600000,
+    });
     return;
   }
 
+  // AppleScript backends error on an existing target file instead of overwriting it.
+  // Move an existing PDF aside so it can be restored if the conversion fails.
+  const backupPath = `${outputPath}.slides2pdf-backup`;
+  fs.rmSync(backupPath, { force: true });
+  if (fs.existsSync(outputPath)) fs.renameSync(outputPath, backupPath);
+  const restoreBackup = () => {
+    if (fs.existsSync(backupPath) && !fs.existsSync(outputPath)) fs.renameSync(backupPath, outputPath);
+  };
+
+  const tmpOut = sandboxSafeOutputPath(backend.type);
+  const scriptOut = tmpOut ?? outputPath;
+
   // Remaining types are AppleScript-driven; detectBackends always sets appName for them
-  const buildScript = APPLE_SCRIPT_BUILDERS[backend.type];
-  runAppleScript(buildScript(backend.appName!, src, outputPath), backend.type);
+  const builder = APPLE_SCRIPT_BUILDERS[backend.type as AppBackendType];
+  try {
+    runAppleScript(builder(backend.appName!, src, scriptOut), backend.type);
+  } catch (e) {
+    // Keep a PDF that was produced despite a late script error (e.g. quit failing).
+    if (!fs.existsSync(scriptOut)) {
+      restoreBackup();
+      throw e;
+    }
+  }
+
+  if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
+  if (fs.existsSync(outputPath)) {
+    fs.rmSync(backupPath, { force: true });
+  } else {
+    restoreBackup();
+    throw new Error("Conversion produced no output file");
+  }
 }

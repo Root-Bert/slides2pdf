@@ -53,21 +53,21 @@ const BACKEND_META: Record<BackendType, BackendMeta> = {
 const GROUPS: { title: string; types: BackendType[]; repExt: string; prefLabel: string; prefKey: string }[] = [
   {
     title: "Presentations  ·  .pptx  .ppt  .key  .odp",
-    types: ["keynote", "powerpoint", "libreoffice"],
+    types: ["powerpoint", "keynote", "libreoffice"],
     repExt: ".pptx",
     prefLabel: "Presentations",
     prefKey: "preferredPresentation",
   },
   {
     title: "Documents  ·  .docx  .doc  .pages  .odt  .rtf",
-    types: ["pages", "word", "libreoffice"],
+    types: ["word", "pages", "libreoffice"],
     repExt: ".docx",
     prefLabel: "Documents",
     prefKey: "preferredDocument",
   },
   {
     title: "Spreadsheets  ·  .xlsx  .xls  .numbers  .ods  .csv",
-    types: ["numbers", "excel", "libreoffice"],
+    types: ["excel", "numbers", "libreoffice"],
     repExt: ".xlsx",
     prefLabel: "Spreadsheets",
     prefKey: "preferredSpreadsheet",

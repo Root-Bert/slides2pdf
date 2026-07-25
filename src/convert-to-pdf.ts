@@ -11,7 +11,7 @@ import {
 } from "@raycast/api";
 import path from "path";
 import fs from "fs";
-import { detectBackends, selectBackendForFile, convertFile, fileCategory } from "./utils/backends";
+import { detectBackends, rankBackendsForFile, convertFile, fileCategory } from "./utils/backends";
 
 export default async function Command() {
   const selected = await getSelectedFinderItems();
@@ -65,46 +65,49 @@ export default async function Command() {
   const errors: { base: string; message: string }[] = [];
   const total = selected.length;
 
-  for (const item of selected) {
+  for (const [index, item] of selected.entries()) {
     const src = path.resolve(item.path);
     const ext = path.extname(src);
     const base = path.basename(src, ext);
     const outputPath = path.join(path.dirname(src), `${base}.pdf`);
 
-    const backend = selectBackendForFile(preferredByCategory[fileCategory(ext)], available, ext);
+    const backends = rankBackendsForFile(preferredByCategory[fileCategory(ext)], available, ext);
 
-    if (!backend) {
+    if (backends.length === 0) {
       const msg = `No engine supports ${ext} files — install LibreOffice for full format support.`;
       console.error(`[slides2pdf] ${msg}`);
       errors.push({ base, message: msg });
       continue;
     }
 
-    try {
-      await showToast(
-        Toast.Style.Animated,
-        `Converting ${base} via ${backend.label} — ${producedFiles.length}/${total}`,
-      );
-      console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
+    // Try each capable engine in order — a flaky native app falls back to the next one.
+    const attemptErrors: string[] = [];
+    let converted = false;
+    for (const backend of backends) {
+      try {
+        await showToast(Toast.Style.Animated, `Converting ${base} via ${backend.label} — ${index + 1}/${total}`);
+        console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
 
-      convertFile(backend, src, outputPath);
+        convertFile(backend, src, outputPath);
 
-      if (!fs.existsSync(outputPath)) {
-        const nearby = fs.readdirSync(path.dirname(outputPath)).filter((f) => f.startsWith(base));
-        console.log(`[slides2pdf] Expected: ${outputPath}`);
-        console.log(`[slides2pdf] Files matching "${base}" in output dir:`, nearby);
-        throw new Error("Output file not found after conversion: " + outputPath);
+        if (!fs.existsSync(outputPath)) {
+          throw new Error(`${backend.label} produced no output file`);
+        }
+
+        producedFiles.push(outputPath);
+        converted = true;
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[slides2pdf] ${backend.label} failed for "${base}":`, message);
+        attemptErrors.push(`${backend.label}: ${message}`);
       }
+    }
 
-      producedFiles.push(outputPath);
-
-      if (selected.length === 1 && openAfterConvertSingle) {
-        await open(outputPath);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[slides2pdf] Failed to convert "${base}":`, message);
-      errors.push({ base, message });
+    if (!converted) {
+      errors.push({ base, message: attemptErrors.join(" · ") });
+    } else if (selected.length === 1 && openAfterConvertSingle) {
+      await open(outputPath);
     }
   }
 
