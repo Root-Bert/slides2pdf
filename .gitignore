@@ -12,3 +12,7 @@ compiled_raycast_rust
 
 # misc
 .DS_Store
+
+# bun artifacts (repo uses npm's package-lock.json for the Raycast Store)
+bun.lock
+bun.lockb
