@@ -168,11 +168,7 @@ export function selectBackendForFile(preferred: string, available: Backend[], ex
 // AppleScript string literal. JSON.stringify is not safe here: it emits \b, \f, and \uXXXX
 // escapes for control characters, which AppleScript does not understand.
 function asString(s: string): string {
-  return `"${s
-    .replace(/[\\"]/g, "\\$&")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")}"`;
+  return `"${s.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t")}"`;
 }
 
 function runAppleScript(script: string, tag: string, timeoutCleanup?: string): void {
