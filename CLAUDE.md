@@ -25,13 +25,16 @@ There is no test suite — CI runs typecheck and lint only.
 
 - **`src/utils/backends.ts`** — all engine logic: detection (filesystem-based, never launches apps), per-extension capability sets, priority ranking, AppleScript generation, and `convertFile`. Key mechanics:
   - **Engine priority is format-native first** (`EXT_PRIORITY`): `.pptx` → PowerPoint before Keynote, `.docx` → Word before Pages, ODF → LibreOffice first. iWork formats (`.key`/`.pages`/`.numbers`) can only be opened by their own app — LibreOffice cannot.
-  - **All AppleScripts share one skeleton** (`conversionScript`): wait until the document is actually open (open is async for non-native formats), capture export errors via `on error` and re-raise them after cleanup, close the doc, quit the app only if we launched it (quit is best-effort so its failure never masks a successful export).
+  - **All AppleScripts share one skeleton** (`conversionScript`): wait for the opened document and bind it by name (open is async for non-native formats, a no-op for already-open documents, and apps may auto-create a blank startup document — count-based waiting mishandles all three; a count-based fallback still kicks in after 10 s if no name matches), capture export errors via `on error` and re-raise them after cleanup, close the doc, quit the app only if we launched it (quit is best-effort so its failure never masks a successful export). If the Node-side timeout kills `osascript`, a best-effort `closeDocScript` closes the abandoned document so retries and fallback engines aren't blocked.
   - **MS Office apps are sandboxed**: exporting to an arbitrary folder fails, so the PDF is written into the app's container (`~/Library/Containers/com.microsoft.{Powerpoint,Word,Excel}/Data/`) and then moved into place.
   - **Word and Excel have different save dictionaries**: Word `save as … file format format PDF`, Excel `save workbook as … filename … file format PDF file format`.
-  - **LibreOffice runs with an isolated profile** (`-env:UserInstallation=…`) because `--convert-to` silently produces nothing when another instance holds the default profile lock.
-  - An existing target PDF is moved aside before AppleScript conversion (export errors on existing files) and restored if conversion fails.
+  - **LibreOffice runs with an isolated profile** (`-env:UserInstallation=…`) because `--convert-to` silently produces nothing when another instance holds the default profile lock, and converts into a temp outdir so the caller controls the output name.
+  - An existing target PDF is moved aside before every conversion and restored on failure — this also stops a stale PDF from masking a silent engine failure; `convertFile` throws unless a fresh output file exists.
+  - Batch output names are de-duplicated (`report.docx` + `report.xlsx` → `report.pdf` + `report (xlsx).pdf`).
 
-- **`src/intro2pdf.tsx`** — `view` command. Checklist UI (using `useCachedState` from `@raycast/utils`) that shows which engines are detected and guides users through installing Homebrew and LibreOffice.
+- **`src/setup.tsx`** — `view` command ("Setup Conversion Engines"). Checklist UI that shows which engines are detected, lets users pick a preferred engine per category, and guides them through installing LibreOffice.
+
+- **`src/utils/preferences.ts`** — shared `LocalStorage` loading of the per-category preferred-engine keys, used by both commands.
 
 Extension preferences and command metadata are declared in `package.json` under `"commands"` and `"preferences"` — Raycast reads these at build time.
 

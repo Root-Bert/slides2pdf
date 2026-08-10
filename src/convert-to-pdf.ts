@@ -7,71 +7,46 @@ import {
   closeMainWindow,
   launchCommand,
   LaunchType,
-  LocalStorage,
 } from "@raycast/api";
 import path from "path";
-import fs from "fs";
 import { detectBackends, rankBackendsForFile, convertFile, fileCategory } from "./utils/backends";
+import { loadPreferences, preferredEngine } from "./utils/preferences";
 
 export default async function Command() {
-  const selected = await getSelectedFinderItems();
+  const selected = await getSelectedFinderItems().catch(() => []);
 
-  if (!selected || selected.length === 0) {
+  if (selected.length === 0) {
     await showToast(Toast.Style.Failure, "No file selected", "Select a file in Finder and run the command again.");
     return;
   }
 
-  try {
-    closeMainWindow();
-  } catch {
-    // ignore
-  }
+  await closeMainWindow().catch(() => {});
 
-  const prefs = getPreferenceValues<{
-    openAfterConvertSingle?: boolean | string;
-    openAfterConvertBatch?: boolean | string;
-  }>();
-
-  const openAfterConvertSingle = prefs.openAfterConvertSingle === true || prefs.openAfterConvertSingle === "true";
-  const openAfterConvertBatch = prefs.openAfterConvertBatch === true || prefs.openAfterConvertBatch === "true";
-
-  const [pp, pd, ps, pi] = await Promise.all([
-    LocalStorage.getItem<string>("preferredPresentation"),
-    LocalStorage.getItem<string>("preferredDocument"),
-    LocalStorage.getItem<string>("preferredSpreadsheet"),
-    LocalStorage.getItem<string>("preferredImage"),
-  ]);
-  const preferredByCategory: Record<string, string> = {
-    presentation: pp ?? "auto",
-    document: pd ?? "auto",
-    spreadsheet: ps ?? "auto",
-    image: pi ?? "auto",
-    other: "auto",
-  };
-
+  const prefs = getPreferenceValues<{ openAfterConvertSingle: boolean; openAfterConvertBatch: boolean }>();
+  const preferred = await loadPreferences();
   const available = detectBackends();
 
   if (available.length === 0) {
     await showToast(Toast.Style.Failure, "No conversion engine found", "Opening setup guide…");
-    try {
-      await launchCommand({ name: "intro2pdf", type: LaunchType.UserInitiated });
-    } catch {
-      // ignore
-    }
+    await launchCommand({ name: "setup", type: LaunchType.UserInitiated }).catch(() => {});
     return;
   }
 
   const producedFiles: string[] = [];
   const errors: { base: string; message: string }[] = [];
+  const targeted = new Set<string>();
   const total = selected.length;
 
   for (const [index, item] of selected.entries()) {
     const src = path.resolve(item.path);
     const ext = path.extname(src);
     const base = path.basename(src, ext);
-    const outputPath = path.join(path.dirname(src), `${base}.pdf`);
+    const dir = path.dirname(src);
+    let outputPath = path.join(dir, `${base}.pdf`);
+    if (targeted.has(outputPath)) outputPath = path.join(dir, `${base} (${ext.slice(1)}).pdf`);
+    targeted.add(outputPath);
 
-    const backends = rankBackendsForFile(preferredByCategory[fileCategory(ext)], available, ext);
+    const backends = rankBackendsForFile(preferredEngine(preferred, fileCategory(ext)), available, ext);
 
     if (backends.length === 0) {
       const msg = `No engine supports ${ext} files — install LibreOffice for full format support.`;
@@ -87,13 +62,7 @@ export default async function Command() {
       try {
         await showToast(Toast.Style.Animated, `Converting ${base} via ${backend.label} — ${index + 1}/${total}`);
         console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
-
         convertFile(backend, src, outputPath);
-
-        if (!fs.existsSync(outputPath)) {
-          throw new Error(`${backend.label} produced no output file`);
-        }
-
         producedFiles.push(outputPath);
         converted = true;
         break;
@@ -106,24 +75,19 @@ export default async function Command() {
 
     if (!converted) {
       errors.push({ base, message: attemptErrors.join(" · ") });
-    } else if (selected.length === 1 && openAfterConvertSingle) {
+    } else if (selected.length === 1 && prefs.openAfterConvertSingle) {
       await open(outputPath);
     }
   }
 
-  if (selected.length > 1 && openAfterConvertBatch && producedFiles.length > 0) {
+  if (selected.length > 1 && prefs.openAfterConvertBatch && producedFiles.length > 0) {
     for (const f of producedFiles) {
-      try {
-        await open(f);
-      } catch {
-        // ignore
-      }
+      await open(f).catch(() => {});
     }
   }
 
   if (errors.length > 0 && producedFiles.length === 0) {
-    const firstError = errors[0];
-    await showToast(Toast.Style.Failure, `Failed: "${firstError.base}"`, firstError.message);
+    await showToast(Toast.Style.Failure, `Failed: "${errors[0].base}"`, errors[0].message);
   } else if (errors.length > 0) {
     await showToast(Toast.Style.Failure, `${errors.length} file(s) failed`, errors.map((e) => e.base).join(", "));
   } else if (producedFiles.length === 1) {

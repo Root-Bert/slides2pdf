@@ -1,6 +1,7 @@
 import { List, Icon, Color, Action, ActionPanel, Clipboard, LocalStorage } from "@raycast/api";
 import { useState, useEffect } from "react";
 import { detectBackends, selectBackendForFile, Backend, BackendType } from "./utils/backends";
+import { loadPreferences } from "./utils/preferences";
 
 interface BackendMeta {
   label: string;
@@ -89,23 +90,11 @@ export default function Command() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      const [pp, pd, ps, pi] = await Promise.all([
-        LocalStorage.getItem<string>("preferredPresentation"),
-        LocalStorage.getItem<string>("preferredDocument"),
-        LocalStorage.getItem<string>("preferredSpreadsheet"),
-        LocalStorage.getItem<string>("preferredImage"),
-      ]);
+    (async () => {
       setAvailable(detectBackends());
-      setPrefs({
-        preferredPresentation: pp ?? "auto",
-        preferredDocument: pd ?? "auto",
-        preferredSpreadsheet: ps ?? "auto",
-        preferredImage: pi ?? "auto",
-      });
+      setPrefs(await loadPreferences());
       setLoaded(true);
-    }
-    load();
+    })();
   }, []);
 
   async function setPreferred(key: string, value: string) {
@@ -114,7 +103,7 @@ export default function Command() {
   }
 
   return (
-    <List isLoading={!loaded} navigationTitle="Intro2PDF">
+    <List isLoading={!loaded}>
       {GROUPS.map((group) => {
         const activeBackend = loaded
           ? selectBackendForFile(prefs[group.prefKey] ?? "auto", available, group.repExt)

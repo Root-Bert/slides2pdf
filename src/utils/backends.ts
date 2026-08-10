@@ -165,7 +165,7 @@ export function selectBackendForFile(preferred: string, available: Backend[], ex
   return rankBackendsForFile(preferred, available, ext)[0] ?? null;
 }
 
-function runAppleScript(script: string, tag: string): void {
+function runAppleScript(script: string, tag: string, timeoutCleanup?: string): void {
   console.log(`[slides2pdf:${tag}] script:\n${script}`);
   try {
     const stdout = execFileSync("osascript", ["-e", script], {
@@ -175,26 +175,36 @@ function runAppleScript(script: string, tag: string): void {
     });
     if (stdout.trim()) console.log(`[slides2pdf:${tag}] stdout:`, stdout.trim());
   } catch (e) {
-    const err = e as { stdout?: string; stderr?: string; message?: string };
+    const err = e as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
+    // A timeout kill skips the script's own close/quit cleanup — close the document from outside
+    // so the file doesn't stay locked for fallback engines and retries.
+    if (err.killed && timeoutCleanup) {
+      spawnSync("osascript", ["-e", timeoutCleanup], { stdio: "ignore", timeout: 15000 });
+    }
     console.error(`[slides2pdf:${tag}] stderr:`, err.stderr);
     throw new Error(err.stderr?.trim() || err.message || String(e));
   }
 }
 
 // Shared AppleScript skeleton. All app scripts follow the same shape:
-// remember whether the app was running, open the file, wait until the document actually appears
-// (open is asynchronous for non-native formats like .pptx in Keynote), run the export inside
-// try/on error so the error message is captured instead of swallowed, always close the document
-// and quit the app if we launched it, then re-raise the captured error outside the tell block.
+// remember whether the app was running, open the file, wait until the opened document appears and
+// bind it by name (open is asynchronous for non-native formats like .pptx in Keynote, is a no-op
+// for an already-open document, and apps may auto-create a blank startup document — a bare
+// count-based wait mishandles all three), run the export inside try/on error so the error message
+// is captured instead of swallowed, always close the document and quit the app if we launched it,
+// then re-raise the captured error outside the tell block.
 function conversionScript(opts: {
   appName: string;
   src: string;
   outputPath: string;
   countExpr: string; // e.g. "documents", "presentations", "workbooks"
-  docExpr: string; // e.g. "front document", "active presentation"
+  docExpr: string; // e.g. "front document", "active presentation" — fallback if no name matches
   exportLine: string; // must reference theDoc and outFile
 }): string {
   const { appName, src, outputPath, countExpr, docExpr, exportLine } = opts;
+  // Apps report the document name with or without extension depending on Finder settings.
+  const fileName = JSON.stringify(path.basename(src));
+  const baseName = JSON.stringify(path.basename(src, path.extname(src)));
   return [
     `set wasRunning to (application "${appName}" is running)`,
     `set errMsg to ""`,
@@ -203,13 +213,20 @@ function conversionScript(opts: {
     `    with timeout of 600 seconds`,
     `      set initialCount to (count of ${countExpr})`,
     `      open POSIX file ${JSON.stringify(src)}`,
+    `      set theDoc to missing value`,
     `      set tries to 0`,
-    `      repeat while (count of ${countExpr}) is less than or equal to initialCount`,
-    `        delay 0.5`,
-    `        set tries to tries + 1`,
-    `        if tries > 120 then error "Timed out waiting for ${appName} to open the file"`,
+    `      repeat while theDoc is missing value`,
+    `        try`,
+    `          set matched to (${countExpr} whose (name is ${fileName} or name is ${baseName}))`,
+    `          if (count of matched) > 0 then set theDoc to item 1 of matched`,
+    `        end try`,
+    `        if theDoc is missing value and tries > 20 and (count of ${countExpr}) > initialCount then set theDoc to ${docExpr}`,
+    `        if theDoc is missing value then`,
+    `          delay 0.5`,
+    `          set tries to tries + 1`,
+    `          if tries > 120 then error "Timed out waiting for ${appName} to open the file"`,
+    `        end if`,
     `      end repeat`,
-    `      set theDoc to ${docExpr}`,
     `      set outFile to POSIX file ${JSON.stringify(outputPath)}`,
     `      ${exportLine}`,
     `      close theDoc saving no`,
@@ -286,6 +303,28 @@ const APPLE_SCRIPT_BUILDERS: Record<AppBackendType, AppleScriptBuilder> = {
   excel: excelScript,
 };
 
+const DOC_CLASS: Record<AppBackendType, string> = {
+  keynote: "document",
+  pages: "document",
+  numbers: "document",
+  word: "document",
+  powerpoint: "presentation",
+  excel: "workbook",
+};
+
+function closeDocScript(appName: string, docClass: string, src: string): string {
+  const match = `name is ${JSON.stringify(path.basename(src))} or name is ${JSON.stringify(
+    path.basename(src, path.extname(src)),
+  )}`;
+  return [
+    `tell application "${appName}"`,
+    `  try`,
+    `    close (every ${docClass} whose ${match}) saving no`,
+    `  end try`,
+    `end tell`,
+  ].join("\n");
+}
+
 // Exposed for syntax-checking the generated scripts without running a conversion.
 export function buildAppleScriptForType(type: AppBackendType, appName: string, src: string, outputPath: string) {
   return APPLE_SCRIPT_BUILDERS[type](appName, src, outputPath);
@@ -317,30 +356,51 @@ function moveFile(from: string, to: string): void {
   }
 }
 
+// Move an existing target PDF aside before every conversion so a failed run can restore it and a
+// stale file can't pass the output check; AppleScript exports also error on existing files.
 export function convertFile(backend: Backend, src: string, outputPath: string): void {
+  const backupPath = `${outputPath}.slides2pdf-backup`;
+  fs.rmSync(backupPath, { force: true });
+  if (fs.existsSync(outputPath)) fs.renameSync(outputPath, backupPath);
+  try {
+    runBackend(backend, src, outputPath);
+    if (!fs.existsSync(outputPath)) throw new Error("Conversion produced no output file");
+    fs.rmSync(backupPath, { force: true });
+  } catch (e) {
+    if (fs.existsSync(backupPath) && !fs.existsSync(outputPath)) fs.renameSync(backupPath, outputPath);
+    throw e;
+  }
+}
+
+function runBackend(backend: Backend, src: string, outputPath: string): void {
   if (backend.type === "libreoffice") {
     // Isolated user profile: --convert-to silently produces nothing when another LibreOffice
-    // instance (e.g. the GUI) holds the default profile lock.
-    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "slides2pdf-lo-"));
+    // instance (e.g. the GUI) holds the default profile lock. Converting into a temp outdir
+    // lets the caller pick any output name (soffice always names the PDF after the source).
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "slides2pdf-lo-"));
+    const outDir = path.join(workDir, "out");
+    fs.mkdirSync(outDir);
     try {
       execFileSync(
         backend.path,
         [
           "--headless",
-          `-env:UserInstallation=file://${profileDir}`,
+          `-env:UserInstallation=file://${path.join(workDir, "profile")}`,
           "--convert-to",
           "pdf",
           "--outdir",
-          path.dirname(outputPath),
+          outDir,
           src,
         ],
         { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600000 },
       );
+      const produced = path.join(outDir, `${path.basename(src, path.extname(src))}.pdf`);
+      if (fs.existsSync(produced)) moveFile(produced, outputPath);
     } catch (e) {
       const err = e as { stderr?: string; message?: string };
       throw new Error(err.stderr?.toString().trim() || err.message || String(e));
     } finally {
-      fs.rmSync(profileDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
     return;
   }
@@ -353,35 +413,19 @@ export function convertFile(backend: Backend, src: string, outputPath: string): 
     return;
   }
 
-  // AppleScript backends error on an existing target file instead of overwriting it.
-  // Move an existing PDF aside so it can be restored if the conversion fails.
-  const backupPath = `${outputPath}.slides2pdf-backup`;
-  fs.rmSync(backupPath, { force: true });
-  if (fs.existsSync(outputPath)) fs.renameSync(outputPath, backupPath);
-  const restoreBackup = () => {
-    if (fs.existsSync(backupPath) && !fs.existsSync(outputPath)) fs.renameSync(backupPath, outputPath);
-  };
-
-  const tmpOut = sandboxSafeOutputPath(backend.type);
-  const scriptOut = tmpOut ?? outputPath;
-
   // Remaining types are AppleScript-driven; detectBackends always sets appName for them
-  const builder = APPLE_SCRIPT_BUILDERS[backend.type as AppBackendType];
+  const type = backend.type as AppBackendType;
+  const tmpOut = sandboxSafeOutputPath(type);
+  const scriptOut = tmpOut ?? outputPath;
   try {
-    runAppleScript(builder(backend.appName!, src, scriptOut), backend.type);
+    runAppleScript(
+      APPLE_SCRIPT_BUILDERS[type](backend.appName!, src, scriptOut),
+      type,
+      closeDocScript(backend.appName!, DOC_CLASS[type], src),
+    );
   } catch (e) {
     // Keep a PDF that was produced despite a late script error (e.g. quit failing).
-    if (!fs.existsSync(scriptOut)) {
-      restoreBackup();
-      throw e;
-    }
+    if (!fs.existsSync(scriptOut)) throw e;
   }
-
   if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
-  if (fs.existsSync(outputPath)) {
-    fs.rmSync(backupPath, { force: true });
-  } else {
-    restoreBackup();
-    throw new Error("Conversion produced no output file");
-  }
 }

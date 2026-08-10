@@ -1,54 +1,45 @@
-# Slides2pdf
+# Slides2PDF
 
-This Raycast command converts PowerPoint (.pptx) files into PDF using LibreOffice in headless mode.
+Convert slides, documents, spreadsheets, and images selected in Finder to PDF — using apps you already have. Nothing is bundled or downloaded: the extension drives locally installed apps (Keynote, PowerPoint, Pages, Word, Numbers, Excel, LibreOffice, or macOS's built-in `sips`) as conversion engines.
 
-## Setup Instructions
+## Usage
 
-### macOS
+1. Select one or more files in Finder.
+2. Run **Convert to PDF**.
+3. Each PDF is written next to its source file.
 
-Install LibreOffice via Homebrew:
+For every file, the extension picks the app that renders the format most faithfully (e.g. PowerPoint for `.pptx`, Keynote for `.key`, Word for `.docx`) and automatically falls back to the next capable engine if the first one fails.
+
+## Setup
+
+At least one conversion engine must be installed. Run **Setup Conversion Engines** to see which engines were detected, pick a preferred engine per file type, and get install help.
+
+Keynote, Pages, and Numbers are free on the Mac App Store. For the widest format support (including ODF formats like `.odp`, `.odt`, `.ods`), install LibreOffice:
 
 ```bash
 brew install --cask libreoffice
 ```
 
-After installation, the `soffice` binary is usually available at one of these locations:
+Images convert out of the box via `sips`, which ships with macOS.
 
-- `/Applications/LibreOffice.app/Contents/MacOS/soffice`
-- `/opt/homebrew/bin/soffice` (Homebrew on Apple Silicon)
-- `/usr/local/bin/soffice` (Homebrew on Intel)
+## Supported Formats
 
-If the command can't find `soffice`, make sure the binary is in your PATH or update the extension to call the full path.
+| Category      | Extensions                                                         |
+| ------------- | ------------------------------------------------------------------ |
+| Presentations | `.pptx` `.ppt` `.pps` `.ppsx` `.key` `.odp`                        |
+| Documents     | `.docx` `.doc` `.pages` `.odt` `.rtf` `.txt`                       |
+| Spreadsheets  | `.xlsx` `.xls` `.numbers` `.ods` `.csv`                            |
+| Images        | `.jpg` `.jpeg` `.png` `.gif` `.tiff` `.tif` `.bmp` `.heic` `.webp` |
 
-### Ubuntu / Debian (Linux)
-
-Install LibreOffice using apt:
-
-```bash
-sudo apt-get update
-sudo apt-get install libreoffice
-```
-
-The `soffice` binary will usually be at `/usr/bin/soffice`.
-
-### Windows
-
-1. Download LibreOffice from: https://www.libreoffice.org/download/
-2. Install it (default path: `C:\Program Files\LibreOffice`).
-3. Add `C:\Program Files\LibreOffice\program` to your PATH environment variable, or update the command to call `soffice.exe` using its full path.
-
-## Troubleshooting
-
-- If you see "LibreOffice (soffice) not found", ensure LibreOffice is installed and `soffice` is available in PATH.
-- On macOS Apple Silicon, Homebrew installs to `/opt/homebrew`; if your PATH doesn't include that, either add it or install the cask which symlinks the app into `/Applications`.
-- If conversions fail but `soffice` is present, try running the same `soffice --headless --convert-to pdf --outdir <outdir> <file>` command in Terminal to get more detailed output.
+iWork formats (`.key`, `.pages`, `.numbers`) require their own app — no other engine can open them.
 
 ## Preferences
 
-- `Open when single file converted` — when enabled, the generated PDF opens immediately for single-file conversions.
-- `Open when multiple files converted` — when enabled, all generated PDFs are opened after batch conversions finish.
+- **Open when single file converted** — open the generated PDF immediately after converting a single file.
+- **Open when multiple files converted** — open all generated PDFs after a batch conversion finishes.
 
-## Notes
+## Troubleshooting
 
-- This command uses LibreOffice in headless mode (no GUI). It relies on the `soffice` binary which LibreOffice provides.
-- If you want a persistent menu-bar indicator, that would require a different extension type. The command shows progress via Raycast toasts.
+- **"No engine supports … files"** — install LibreOffice (see Setup above) for full format support.
+- **A conversion fails with a native app** — the extension automatically retries with the next capable engine; check the Raycast toast for the per-engine error messages.
+- **LibreOffice conversions** run with an isolated profile, so they work even while the LibreOffice GUI is open.
