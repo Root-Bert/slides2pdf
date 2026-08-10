@@ -3,10 +3,24 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
+import { renderTextFilePdf } from "./textpdf";
 
 const execFileAsync = promisify(execFile);
 
-export type BackendType = "keynote" | "powerpoint" | "pages" | "word" | "numbers" | "excel" | "libreoffice" | "sips";
+// execFile kills the child when piped output exceeds maxBuffer (default 1 MiB) — a chatty
+// engine (sips warnings, soffice logs) must not abort an otherwise working conversion.
+const MAX_OUTPUT_BUFFER = 16 * 1024 * 1024;
+
+export type BackendType =
+  | "keynote"
+  | "powerpoint"
+  | "pages"
+  | "word"
+  | "numbers"
+  | "excel"
+  | "libreoffice"
+  | "sips"
+  | "builtin";
 
 export interface Backend {
   type: BackendType;
@@ -26,7 +40,7 @@ const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".tiff", ".tif", ".
 // iWork apps open their native format + MS formats but not ODF; MS apps open ODF but not iWork formats;
 // LibreOffice opens everything except iWork formats.
 const APPLE_NATIVE_EXTS = new Set([".key", ".pages", ".numbers"]);
-const BACKEND_EXTS: Record<BackendType, Set<string>> = {
+const BACKEND_EXTS: Record<Exclude<BackendType, "builtin">, Set<string>> = {
   keynote: new Set([".key", ".pptx", ".ppt"]),
   powerpoint: new Set([".pptx", ".ppt", ".pps", ".ppsx", ".odp"]),
   pages: new Set([".pages", ".docx", ".doc", ".rtf", ".txt"]),
@@ -41,13 +55,29 @@ const BACKEND_EXTS: Record<BackendType, Set<string>> = {
   sips: IMAGE_EXTS,
 };
 
+// The builtin text renderer (pdf-lib, bundled) claims every extension the richer engines don't:
+// code, JSON, Markdown, logs, config files, … It renders raw file content as monospaced text, so
+// any format some real engine understands is excluded even when that engine isn't installed — a
+// garbled text dump of a .docx is worse than a clear "install LibreOffice" error. Derived from
+// BACKEND_EXTS so a new engine capability can never fall through to a raw text dump. .pdf is
+// excluded because the file already is one (convert-to-pdf.ts also skips it with a friendlier
+// message). Text-based graphics are excluded too — a dump of SVG/PostScript source is not the
+// image the user expects. Binary content is rejected at conversion time.
+const TEXT_GRAPHIC_EXTS = [".svg", ".svgz", ".eps", ".ps", ".ai"];
+const BUILTIN_EXCLUDED_EXTS = new Set([
+  ...Object.values(BACKEND_EXTS).flatMap((s) => [...s]),
+  ".pdf",
+  ...TEXT_GRAPHIC_EXTS,
+]);
+const BUILTIN_TEXT_EXTS = new Set([".txt", ".csv"]); // plain-text formats it can also serve as last resort
+
 // Priority order per file category (fallback when no per-extension order applies)
 const PRIORITY: Record<FileCategory, BackendType[]> = {
   presentation: ["powerpoint", "keynote", "libreoffice"],
   document: ["word", "pages", "libreoffice"],
   spreadsheet: ["excel", "numbers", "libreoffice"],
   image: ["sips", "libreoffice"],
-  other: ["libreoffice"],
+  other: ["builtin"],
 };
 
 // The app whose native format a file is in renders it most faithfully, so it goes first:
@@ -138,11 +168,17 @@ export function detectBackends(): Backend[] {
     found.push({ type: "sips", label: "sips", path: "/usr/bin/sips" });
   }
 
+  // Bundled pdf-lib text renderer — always available, pushed last so it stays the last resort
+  // in rankBackendsForFile's catch-all pass.
+  found.push({ type: "builtin", label: "Text Renderer", path: "builtin" });
+
   return found;
 }
 
 export function supportsExtension(type: BackendType, ext: string): boolean {
-  return BACKEND_EXTS[type].has(ext.toLowerCase());
+  const e = ext.toLowerCase();
+  if (type === "builtin") return BUILTIN_TEXT_EXTS.has(e) || !BUILTIN_EXCLUDED_EXTS.has(e);
+  return BACKEND_EXTS[type].has(e);
 }
 
 // All capable backends for a file, best first: explicit preference, then category priority,
@@ -181,6 +217,7 @@ async function runAppleScript(script: string, tag: string, timeoutCleanup?: stri
     const { stdout } = await execFileAsync("osascript", ["-e", script], {
       encoding: "utf8",
       timeout: 660000,
+      maxBuffer: MAX_OUTPUT_BUFFER,
     });
     if (stdout.trim()) console.log(`[slides2pdf:${tag}] stdout:`, stdout.trim());
   } catch (e) {
@@ -362,7 +399,7 @@ async function runBackend(backend: Backend, src: string, outputPath: string): Pr
           outDir,
           src,
         ],
-        { encoding: "utf8", timeout: 600000 },
+        { encoding: "utf8", timeout: 600000, maxBuffer: MAX_OUTPUT_BUFFER },
       );
       const produced = path.join(outDir, `${path.basename(src, path.extname(src))}.pdf`);
       if (fs.existsSync(produced)) moveFile(produced, outputPath);
@@ -376,7 +413,15 @@ async function runBackend(backend: Backend, src: string, outputPath: string): Pr
   }
 
   if (backend.type === "sips") {
-    await execFileAsync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], { timeout: 600000 });
+    await execFileAsync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], {
+      timeout: 600000,
+      maxBuffer: MAX_OUTPUT_BUFFER,
+    });
+    return;
+  }
+
+  if (backend.type === "builtin") {
+    await renderTextFilePdf(src, outputPath);
     return;
   }
 

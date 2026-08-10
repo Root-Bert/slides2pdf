@@ -55,6 +55,10 @@ const BACKEND_META: Record<BackendType, BackendMeta> = {
     label: "sips",
     hint: "Built into macOS — no install needed",
   },
+  builtin: {
+    label: "Text Renderer",
+    hint: "Bundled with the extension — no install needed",
+  },
 };
 
 const GROUPS: {
@@ -177,6 +181,18 @@ export default function Command() {
           </List.Section>
         );
       })}
+      {/* Text formats have exactly one engine (the bundled renderer) and no preference to pick,
+          so this section is informational only and stays outside the GROUPS loop. */}
+      <List.Section title="Text & Code  ·  .json  .md  .xml  .log  source files …">
+        <List.Item
+          title={BACKEND_META.builtin.label}
+          subtitle={BACKEND_META.builtin.hint}
+          accessories={[
+            { tag: { value: "In Use", color: Color.Green } },
+            { icon: { source: Icon.Checkmark, tintColor: Color.Green } },
+          ]}
+        />
+      </List.Section>
     </List>
   );
 }

@@ -1,13 +1,5 @@
-import {
-  showToast,
-  Toast,
-  getSelectedFinderItems,
-  open,
-  getPreferenceValues,
-  closeMainWindow,
-  launchCommand,
-  LaunchType,
-} from "@raycast/api";
+import { showToast, Toast, getSelectedFinderItems, open, getPreferenceValues, closeMainWindow } from "@raycast/api";
+import fs from "fs";
 import path from "path";
 import { detectBackends, rankBackendsForFile, convertFile, fileCategory } from "./utils/backends";
 import { loadPreferences } from "./utils/preferences";
@@ -23,27 +15,41 @@ export default async function Command() {
   await closeMainWindow().catch(() => {});
 
   const prefs = getPreferenceValues<{ openAfterConvertSingle: boolean; openAfterConvertBatch: boolean }>();
+  // detectBackends always includes the bundled text renderer, so there is at least one engine.
   const available = detectBackends();
-
-  if (available.length === 0) {
-    await showToast(Toast.Style.Failure, "No conversion engine found", "Opening setup guide…");
-    await launchCommand({ name: "setup", type: LaunchType.UserInitiated }).catch(() => {});
-    return;
-  }
-
   const preferred = await loadPreferences();
   const producedFiles: string[] = [];
   const errors: { base: string; message: string }[] = [];
+  const skippedPdfs: string[] = [];
   const targeted = new Set<string>();
+  // Never overwrite: a name is taken if another file in this batch targets it OR it
+  // already exists on disk — an existing report.pdf survives converting report.docx.
+  const taken = (p: string) => targeted.has(p) || fs.existsSync(p);
   const toast = await showToast(Toast.Style.Animated, "Converting…");
 
   for (const [index, item] of selected.entries()) {
     const src = path.resolve(item.path);
+    if (fs.statSync(src).isDirectory()) {
+      errors.push({ base: path.basename(src), message: "Folders can't be converted" });
+      continue;
+    }
     const ext = path.extname(src);
     const base = path.basename(src, ext);
     const dir = path.dirname(src);
-    let outputPath = path.join(dir, `${base}.pdf`);
-    if (targeted.has(outputPath)) outputPath = path.join(dir, `${base} (${ext.slice(1)}).pdf`);
+
+    // Friendlier than the "no engine" error the capability layer would produce —
+    // .pdf is also in BUILTIN_EXCLUDED_EXTS (backends.ts) so no engine ever claims it.
+    // Its name needs no reservation: it exists on disk, so `taken` below blocks it.
+    if (ext.toLowerCase() === ".pdf") {
+      skippedPdfs.push(base + ext);
+      continue;
+    }
+
+    // Strip leading dots so converting a dotfile (.zshrc) doesn't produce a Finder-hidden output
+    const outName = base.replace(/^\.+/, "") || base;
+    let outputPath = path.join(dir, `${outName}.pdf`);
+    if (taken(outputPath) && ext) outputPath = path.join(dir, `${outName} (${ext.slice(1)}).pdf`);
+    for (let n = 2; taken(outputPath); n++) outputPath = path.join(dir, `${outName} (${n}).pdf`);
     targeted.add(outputPath);
 
     const backends = rankBackendsForFile(preferred[fileCategory(ext)], available, ext);
@@ -56,12 +62,11 @@ export default async function Command() {
     }
 
     // Try each capable engine in order — a flaky native app falls back to the next one.
+    toast.title = selected.length > 1 ? `Converting ${index + 1}/${selected.length}: ${base}` : `Converting ${base}`;
     const attemptErrors: string[] = [];
     let converted = false;
     for (const backend of backends) {
       try {
-        toast.title =
-          selected.length > 1 ? `Converting ${index + 1}/${selected.length}: ${base}` : `Converting ${base}`;
         toast.message = `via ${backend.label}`;
         console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
         await convertFile(backend, src, outputPath);
@@ -96,8 +101,12 @@ export default async function Command() {
   } else if (failed) {
     toast.title = `${errors.length} file(s) failed`;
     toast.message = errors.map((e) => e.base).join(", ");
+  } else if (producedFiles.length === 0) {
+    toast.title = "Nothing to convert";
+    toast.message = skippedPdfs.length === 1 ? `${skippedPdfs[0]} is already a PDF` : "Selected files are already PDFs";
   } else {
     toast.title = "Converted";
-    toast.message = producedFiles.length === 1 ? path.basename(producedFiles[0]) : `${producedFiles.length} files`;
+    const summary = producedFiles.length === 1 ? path.basename(producedFiles[0]) : `${producedFiles.length} files`;
+    toast.message = skippedPdfs.length > 0 ? `${summary} — skipped ${skippedPdfs.length} already-PDF` : summary;
   }
 }

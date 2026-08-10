@@ -1,12 +1,12 @@
 # Slides2PDF
 
-Convert slides, documents, spreadsheets, and images selected in Finder to PDF — using apps you already have. Nothing is bundled or downloaded: the extension drives locally installed apps (Keynote, PowerPoint, Pages, Word, Numbers, Excel, LibreOffice, or macOS's built-in `sips`) as conversion engines.
+Convert slides, documents, spreadsheets, images, and text or code files selected in Finder to PDF — using apps you already have. The extension drives locally installed apps (Keynote, PowerPoint, Pages, Word, Numbers, Excel, LibreOffice, or macOS's built-in `sips`) as conversion engines; text-based files are rendered by a bundled text renderer, so they work with no extra apps at all.
 
 ## Usage
 
 1. Select one or more files in Finder.
 2. Run **Convert to PDF**.
-3. Each PDF is written next to its source file.
+3. Each PDF is written next to its source file. Existing files are never overwritten — if `report.pdf` already exists, the new file gets a suffix like `report (docx).pdf` or `report (2).pdf`.
 
 For every file, the extension picks the app that renders the format most faithfully (e.g. PowerPoint for `.pptx`, Keynote for `.key`, Word for `.docx`) and automatically falls back to the next capable engine if the first one fails.
 
@@ -30,8 +30,9 @@ Images convert out of the box via `sips`, which ships with macOS.
 | Documents     | `.docx` `.doc` `.pages` `.odt` `.rtf` `.txt`                       |
 | Spreadsheets  | `.xlsx` `.xls` `.numbers` `.ods` `.csv`                            |
 | Images        | `.jpg` `.jpeg` `.png` `.gif` `.tiff` `.tif` `.bmp` `.heic` `.webp` |
+| Text & Code   | `.json` `.md` `.xml` `.log` `.yaml` and any other plain-text file  |
 
-iWork formats (`.key`, `.pages`, `.numbers`) require their own app — no other engine can open them.
+iWork formats (`.key`, `.pages`, `.numbers`) require their own app — no other engine can open them. Text and code files are rendered by the built-in text renderer (monospaced, paginated) and need no installed apps.
 
 ## Preferences
 
