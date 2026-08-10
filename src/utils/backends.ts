@@ -1,7 +1,10 @@
-import { execFileSync, spawnSync } from "child_process";
+import { execFile, spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 export type BackendType = "keynote" | "powerpoint" | "pages" | "word" | "numbers" | "excel" | "libreoffice" | "sips";
 
@@ -171,13 +174,12 @@ function asString(s: string): string {
   return `"${s.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t")}"`;
 }
 
-function runAppleScript(script: string, tag: string, timeoutCleanup?: string): void {
+async function runAppleScript(script: string, tag: string, timeoutCleanup?: string): Promise<void> {
   // Full script contains local file paths — keep it out of production logs.
   if (process.env.NODE_ENV === "development") console.log(`[slides2pdf:${tag}] script:\n${script}`);
   try {
-    const stdout = execFileSync("osascript", ["-e", script], {
+    const { stdout } = await execFileAsync("osascript", ["-e", script], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
       timeout: 660000,
     });
     if (stdout.trim()) console.log(`[slides2pdf:${tag}] stdout:`, stdout.trim());
@@ -186,7 +188,7 @@ function runAppleScript(script: string, tag: string, timeoutCleanup?: string): v
     // A timeout kill skips the script's own close/quit cleanup — close the document from outside
     // so the file doesn't stay locked for fallback engines and retries.
     if (err.killed && timeoutCleanup) {
-      spawnSync("osascript", ["-e", timeoutCleanup], { stdio: "ignore", timeout: 15000 });
+      await execFileAsync("osascript", ["-e", timeoutCleanup], { timeout: 15000 }).catch(() => {});
     }
     console.error(`[slides2pdf:${tag}] stderr:`, err.stderr);
     throw new Error(err.stderr?.trim() || err.message || String(e));
@@ -326,12 +328,12 @@ function moveFile(from: string, to: string): void {
 
 // Move an existing target PDF aside before every conversion so a failed run can restore it and a
 // stale file can't pass the output check; AppleScript exports also error on existing files.
-export function convertFile(backend: Backend, src: string, outputPath: string): void {
+export async function convertFile(backend: Backend, src: string, outputPath: string): Promise<void> {
   const backupPath = `${outputPath}.slides2pdf-backup`;
   fs.rmSync(backupPath, { force: true });
   if (fs.existsSync(outputPath)) fs.renameSync(outputPath, backupPath);
   try {
-    runBackend(backend, src, outputPath);
+    await runBackend(backend, src, outputPath);
     if (!fs.existsSync(outputPath)) throw new Error("Conversion produced no output file");
     fs.rmSync(backupPath, { force: true });
   } catch (e) {
@@ -340,7 +342,7 @@ export function convertFile(backend: Backend, src: string, outputPath: string): 
   }
 }
 
-function runBackend(backend: Backend, src: string, outputPath: string): void {
+async function runBackend(backend: Backend, src: string, outputPath: string): Promise<void> {
   if (backend.type === "libreoffice") {
     // Isolated user profile: --convert-to silently produces nothing when another LibreOffice
     // instance (e.g. the GUI) holds the default profile lock. Converting into a temp outdir
@@ -349,7 +351,7 @@ function runBackend(backend: Backend, src: string, outputPath: string): void {
     const outDir = path.join(workDir, "out");
     fs.mkdirSync(outDir);
     try {
-      execFileSync(
+      await execFileAsync(
         backend.path,
         [
           "--headless",
@@ -360,7 +362,7 @@ function runBackend(backend: Backend, src: string, outputPath: string): void {
           outDir,
           src,
         ],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600000 },
+        { encoding: "utf8", timeout: 600000 },
       );
       const produced = path.join(outDir, `${path.basename(src, path.extname(src))}.pdf`);
       if (fs.existsSync(produced)) moveFile(produced, outputPath);
@@ -374,10 +376,7 @@ function runBackend(backend: Backend, src: string, outputPath: string): void {
   }
 
   if (backend.type === "sips") {
-    execFileSync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], {
-      stdio: "ignore",
-      timeout: 600000,
-    });
+    await execFileAsync(backend.path, ["-s", "format", "pdf", src, "--out", outputPath], { timeout: 600000 });
     return;
   }
 
@@ -386,7 +385,7 @@ function runBackend(backend: Backend, src: string, outputPath: string): void {
   const tmpOut = sandboxSafeOutputPath(type);
   const scriptOut = tmpOut ?? outputPath;
   try {
-    runAppleScript(
+    await runAppleScript(
       conversionScript(backend.appName!, src, scriptOut, APP_SPECS[type]),
       type,
       closeDocScript(backend.appName!, APP_SPECS[type].docClass, src),

@@ -60,9 +60,11 @@ export default async function Command() {
     let converted = false;
     for (const backend of backends) {
       try {
-        toast.title = `Converting ${base} via ${backend.label} — ${index + 1}/${selected.length}`;
+        toast.title =
+          selected.length > 1 ? `Converting ${index + 1}/${selected.length}: ${base}` : `Converting ${base}`;
+        toast.message = `via ${backend.label}`;
         console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
-        convertFile(backend, src, outputPath);
+        await convertFile(backend, src, outputPath);
         producedFiles.push(outputPath);
         converted = true;
         break;
