@@ -36,11 +36,15 @@ export default async function Command() {
   // Stopping only skips files that haven't started — a running conversion is left to finish, so
   // the action is offered for batches only, where there is something left to skip. The toast's
   // close button is not a cancel: the API gives no callback for it, so it only hides the toast.
+  // The shortcut is spelled out in the toast because a no-view command's toast does not reveal
+  // its actions on hover, which would leave the only way to stop undiscoverable.
   let stopped = false;
   let skipped = 0;
+  const stopHint = selected.length > 1 ? "⌘. to stop" : "";
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: "Converting…",
+    message: stopHint || undefined,
     primaryAction:
       selected.length > 1
         ? {
@@ -106,7 +110,7 @@ export default async function Command() {
     let converted = false;
     for (const backend of backends) {
       try {
-        toast.message = `via ${backend.label}`;
+        toast.message = stopHint ? `via ${backend.label}  ·  ${stopHint}` : `via ${backend.label}`;
         console.log(`[slides2pdf] Converting "${base}" via ${backend.label}`);
         await convertFile(backend, src, outputPath);
         producedFiles.push(outputPath);
