@@ -45,7 +45,10 @@ const BACKEND_EXTS: Record<Exclude<BackendType, "builtin">, Set<string>> = {
   keynote: new Set([".key", ".pptx", ".ppt"]),
   powerpoint: new Set([".pptx", ".ppt", ".pps", ".ppsx", ".odp"]),
   pages: new Set([".pages", ".docx", ".doc", ".rtf", ".txt"]),
-  word: new Set([".docx", ".doc", ".odt", ".rtf", ".txt"]),
+  // Word can't be driven for .txt: it imports plain text into an unsaved scratch document named
+  // ~WRD0000 in its own Temp folder, so the file it opened cannot be identified and every
+  // conversion stalls until the wait loop gives up. Other formats keep their real name and path.
+  word: new Set([".docx", ".doc", ".odt", ".rtf"]),
   numbers: new Set([".numbers", ".xlsx", ".xls", ".csv"]),
   excel: new Set([".xlsx", ".xls", ".ods", ".csv"]),
   libreoffice: new Set(
@@ -92,6 +95,9 @@ const EXT_PRIORITY: Record<string, BackendType[]> = {
   ".doc": ["word", "pages", "libreoffice"],
   ".pages": ["pages"],
   ".odt": ["libreoffice", "word"],
+  // Plain text has no formatting to preserve, so the bundled renderer is both exact and instant —
+  // no reason to launch a word processor for it.
+  ".txt": ["builtin", "pages", "libreoffice"],
   ".xlsx": ["excel", "numbers", "libreoffice"],
   ".xls": ["excel", "numbers", "libreoffice"],
   ".numbers": ["numbers"],
