@@ -233,10 +233,10 @@ async function runAppleScript(script: string, tag: string, timeoutCleanup?: stri
   }
 }
 
-// Per-app AppleScript vocabulary. The plural collection and whose-filters derive from docClass;
-// exportLine must reference theDoc and outFile. Excel's dictionary differs from Word's
-// ("save workbook as … filename … file format PDF file format"); only Keynote supports
-// PDF image quality.
+// Per-app AppleScript vocabulary. docClass names the document class and its plural collection;
+// every other entry is a function of the document expression the script currently addresses.
+// Excel's dictionary differs from Word's ("save workbook as … filename … file format PDF file
+// format"); only Keynote supports PDF image quality.
 interface AppScriptSpec {
   docClass: string;
   exportLine: (doc: string) => string; // export statement for a document expression, writing to outFile
@@ -564,15 +564,21 @@ async function runBackend(backend: Backend, src: string, outputPath: string): Pr
   const tmpOut = sandboxSafeOutputPath(type);
   const scriptOut = tmpOut ?? outputPath;
   try {
-    await runAppleScript(
-      conversionScript(backend.appName!, src, scriptOut, APP_SPECS[type]),
-      type,
-      closeDocScript(backend.appName!, src, APP_SPECS[type]),
-    );
-  } catch (e) {
-    // Keep a PDF that was produced despite a late script error (the close failing after a good
-    // export) — but only a readable one, so a half-written file falls through to the next engine.
-    if (!(await isReadablePdf(scriptOut))) throw e;
+    try {
+      await runAppleScript(
+        conversionScript(backend.appName!, src, scriptOut, APP_SPECS[type]),
+        type,
+        closeDocScript(backend.appName!, src, APP_SPECS[type]),
+      );
+    } catch (e) {
+      // Keep a PDF that was produced despite a late script error (the close failing after a good
+      // export) — but only a readable one, so a half-written file falls through to the next engine.
+      if (!(await isReadablePdf(scriptOut))) throw e;
+    }
+    if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
+  } finally {
+    // A failed export can leave a partial file inside the app's container, where nothing else
+    // would ever clean it up. moveFile already removed it on the success path.
+    if (tmpOut) fs.rmSync(tmpOut, { force: true });
   }
-  if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
 }
