@@ -33,9 +33,31 @@ export default async function Command() {
   // Never overwrite: a name is taken if another file in this batch targets it OR it
   // already exists on disk — an existing report.pdf survives converting report.docx.
   const taken = (p: string) => targeted.has(p) || fs.existsSync(p);
-  const toast = await showToast(Toast.Style.Animated, "Converting…");
+  // Stopping only skips files that haven't started — a running conversion is left to finish, so
+  // the action is offered for batches only, where there is something left to skip. The toast's
+  // close button is not a cancel: the API gives no callback for it, so it only hides the toast.
+  let stopped = false;
+  let skipped = 0;
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: "Converting…",
+    primaryAction:
+      selected.length > 1
+        ? {
+            title: "Stop After Current File",
+            shortcut: { modifiers: ["cmd"], key: "." },
+            onAction: () => {
+              stopped = true;
+            },
+          }
+        : undefined,
+  });
 
   for (const [index, item] of selected.entries()) {
+    if (stopped) {
+      skipped = selected.length - index;
+      break;
+    }
     const src = path.resolve(item.path);
     // statSync throws on paths that vanished since selection — that must fail this
     // file only, not abort the whole batch.
@@ -104,15 +126,21 @@ export default async function Command() {
     }
   }
 
-  if (selected.length > 1 && prefs.openAfterConvertBatch && producedFiles.length > 0) {
+  // Opening the results after a deliberate stop would work against what the user just asked for.
+  if (!stopped && selected.length > 1 && prefs.openAfterConvertBatch && producedFiles.length > 0) {
     for (const f of producedFiles) {
       await open(f).catch(() => {});
     }
   }
 
   const failed = errors.length > 0;
+  toast.primaryAction = undefined;
   toast.style = failed ? Toast.Style.Failure : Toast.Style.Success;
-  if (failed && producedFiles.length === 0) {
+  if (stopped) {
+    toast.title = "Stopped";
+    const done = producedFiles.length === 1 ? "1 file converted" : `${producedFiles.length} files converted`;
+    toast.message = `${done}, ${skipped} skipped${errors.length ? `, ${errors.length} failed` : ""}`;
+  } else if (failed && producedFiles.length === 0) {
     toast.title = `Failed: "${errors[0].base}"`;
     toast.message = errors[0].message;
   } else if (failed) {
