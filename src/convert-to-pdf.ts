@@ -78,10 +78,14 @@ export default async function Command() {
         continue;
       }
 
-      // Strip leading dots so converting a dotfile (.zshrc) doesn't produce a Finder-hidden output
-      const outName = base.replace(/^\.+/, "") || base;
+      // Strip leading dots and spaces so converting a dotfile (.zshrc) doesn't produce a
+      // Finder-hidden output. A name made only of dots leaves nothing to keep, so it gets a
+      // neutral one rather than a hidden file — the collision handling below makes it unique.
+      const outName = base.replace(/^[.\s]+/, "").trimEnd() || "converted";
       let outputPath = path.join(dir, `${outName}.pdf`);
-      if (taken(outputPath) && ext) outputPath = path.join(dir, `${outName} (${ext.slice(1)}).pdf`);
+      // The extension tag only helps when there is one — ".", the extension of a name made of
+      // dots, would tag the file with an empty pair of brackets.
+      if (taken(outputPath) && ext.length > 1) outputPath = path.join(dir, `${outName} (${ext.slice(1)}).pdf`);
       for (let n = 2; taken(outputPath); n++) outputPath = path.join(dir, `${outName} (${n}).pdf`);
       targeted.add(outputPath);
 
