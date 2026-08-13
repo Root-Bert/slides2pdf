@@ -472,19 +472,47 @@ export async function convertFile(backend: Backend, src: string, outputPath: str
 
 // Atomic no-overwrite move: link() fails with EEXIST instead of replacing a file someone
 // created at outputPath while the engine was running (rename would silently clobber it).
-// Staging lives next to the output, so cross-device is impossible; the copy fallback only
-// covers filesystems without hard links, where the small check-then-move race is the best we get.
+// Staging lives next to the output, so cross-device is impossible; the exclusive-copy fallback
+// covers filesystems without hard links with the same no-overwrite guarantee.
 function publishFile(staging: string, outputPath: string): void {
   try {
     fs.linkSync(staging, outputPath);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST" || fs.existsSync(outputPath)) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
       throw new Error(`Output already exists: ${path.basename(outputPath)}`);
     }
-    moveFile(staging, outputPath);
-    return;
+    try {
+      fs.copyFileSync(staging, outputPath, fs.constants.COPYFILE_EXCL);
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`Output already exists: ${path.basename(outputPath)}`);
+      }
+      throw e2;
+    }
   }
   fs.rmSync(staging, { force: true });
+}
+
+// A PDF whose %%EOF trailer never got written is a truncated export, not a finished document.
+// The spec puts %%EOF at the end of file; readers tolerate trailing bytes, so the last 1 KiB
+// is scanned rather than only the final line.
+function isCompletePdf(p: string): boolean {
+  try {
+    const fd = fs.openSync(p, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      const head = Buffer.alloc(5);
+      if (fs.readSync(fd, head, 0, 5, 0) !== 5 || !head.equals(Buffer.from("%PDF-"))) return false;
+      const tailLen = Math.min(1024, size);
+      const tail = Buffer.alloc(tailLen);
+      fs.readSync(fd, tail, 0, tailLen, size - tailLen);
+      return tail.includes("%%EOF");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
 }
 
 async function runBackend(backend: Backend, src: string, outputPath: string): Promise<void> {
@@ -544,8 +572,9 @@ async function runBackend(backend: Backend, src: string, outputPath: string): Pr
       closeDocScript(backend.appName!, src, APP_SPECS[type]),
     );
   } catch (e) {
-    // Keep a PDF that was produced despite a late script error (e.g. quit failing).
-    if (!fs.existsSync(scriptOut)) throw e;
+    // Keep a PDF that was produced despite a late script error (e.g. quit failing) — but only
+    // a complete one: an error during the export itself can leave a truncated file behind.
+    if (!isCompletePdf(scriptOut)) throw e;
   }
   if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
 }
