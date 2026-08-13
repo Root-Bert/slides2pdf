@@ -36,15 +36,15 @@ export default async function Command() {
   // Stopping only skips files that haven't started — a running conversion is left to finish, so
   // the action is offered for batches only, where there is something left to skip. The toast's
   // close button is not a cancel: the API gives no callback for it, so it only hides the toast.
-  // The shortcut is spelled out in the toast because a no-view command's toast does not reveal
-  // its actions on hover, which would leave the only way to stop undiscoverable.
+  // The shortcut goes in the title: a no-view command's toast shows the title only — it renders
+  // neither the message nor an action on hover — which would leave the only way to stop
+  // undiscoverable.
   let stopped = false;
   let skipped = 0;
-  const stopHint = selected.length > 1 ? "⌘. to stop" : "";
+  const stopHint = selected.length > 1 ? "  ·  ⌘. to stop" : "";
   const toast = await showToast({
     style: Toast.Style.Animated,
-    title: "Converting…",
-    message: stopHint || undefined,
+    title: `Converting…${stopHint}`,
     primaryAction:
       selected.length > 1
         ? {
@@ -105,7 +105,8 @@ export default async function Command() {
     }
 
     // Try each capable engine in order — a flaky native app falls back to the next one.
-    toast.title = selected.length > 1 ? `Converting ${index + 1}/${selected.length}: ${base}` : `Converting ${base}`;
+    toast.title =
+      selected.length > 1 ? `Converting ${index + 1}/${selected.length}: ${base}${stopHint}` : `Converting ${base}`;
     const attemptErrors: string[] = [];
     let converted = false;
     for (const backend of backends) {
