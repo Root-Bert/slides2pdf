@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
+import { PDFDocument } from "pdf-lib";
 import { renderTextFilePdf } from "./textpdf";
 
 const execFileAsync = promisify(execFile);
@@ -498,20 +499,17 @@ function publishFile(staging: string, outputPath: string): void {
   }
 }
 
-// A PDF whose %%EOF trailer never got written is a truncated export, not a finished document.
-// Readers tolerate bytes after the trailer, so the last kilobyte is scanned, not only the end.
-function isCompletePdf(p: string): boolean {
-  let fd: number | undefined;
+// Whether a file left behind by a failed export is a usable PDF. Parsing it is the only honest
+// check: a %%EOF trailer says nothing about the body, and an export that died halfway can leave a
+// file that still ends in one. Encrypted output counts as usable — it opens fine in a reader, so
+// discarding it would lose a good conversion. Only reached on the error path, so the parse costs
+// nothing in the normal case.
+async function isReadablePdf(p: string): Promise<boolean> {
   try {
-    fd = fs.openSync(p, "r");
-    const size = fs.fstatSync(fd).size;
-    const tail = Buffer.alloc(Math.min(1024, size));
-    fs.readSync(fd, tail, 0, tail.length, size - tail.length);
-    return tail.includes("%%EOF");
+    const doc = await PDFDocument.load(fs.readFileSync(p), { ignoreEncryption: true });
+    return doc.getPageCount() > 0;
   } catch {
     return false;
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
@@ -572,9 +570,9 @@ async function runBackend(backend: Backend, src: string, outputPath: string): Pr
       closeDocScript(backend.appName!, src, APP_SPECS[type]),
     );
   } catch (e) {
-    // Keep a PDF that was produced despite a late script error (e.g. quit failing) — but only
-    // a complete one: an error during the export itself can leave a truncated file behind.
-    if (!isCompletePdf(scriptOut)) throw e;
+    // Keep a PDF that was produced despite a late script error (the close failing after a good
+    // export) — but only a readable one, so a half-written file falls through to the next engine.
+    if (!(await isReadablePdf(scriptOut))) throw e;
   }
   if (tmpOut && fs.existsSync(tmpOut)) moveFile(tmpOut, outputPath);
 }
