@@ -183,7 +183,7 @@ export function detectBackends(): Backend[] {
   return found;
 }
 
-export function supportsExtension(type: BackendType, ext: string): boolean {
+function supportsExtension(type: BackendType, ext: string): boolean {
   const e = ext.toLowerCase();
   if (type === "builtin") return BUILTIN_TEXT_EXTS.has(e) || !BUILTIN_EXCLUDED_EXTS.has(e);
   return BACKEND_EXTS[type].has(e);
