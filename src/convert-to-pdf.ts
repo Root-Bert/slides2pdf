@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { detectBackends, rankBackendsForFile, convertFile, fileCategory } from "./utils/backends";
 import { loadPreferences } from "./utils/preferences";
+import { beginConversion, endConversion, isStopRequested, markAlive } from "./utils/stop-signal";
 
 export default async function Command() {
   // The API throws both when nothing is selected and on real failures (e.g. missing
@@ -34,14 +35,15 @@ export default async function Command() {
   // already exists on disk — an existing report.pdf survives converting report.docx.
   const taken = (p: string) => targeted.has(p) || fs.existsSync(p);
   // Stopping only skips files that haven't started — a running conversion is left to finish, so
-  // the action is offered for batches only, where there is something left to skip. The toast's
-  // close button is not a cancel: the API gives no callback for it, so it only hides the toast.
-  // The shortcut goes in the title: a no-view command's toast shows the title only — it renders
-  // neither the message nor an action on hover — which would leave the only way to stop
-  // undiscoverable.
+  // it is offered for batches only, where there is something left to skip. Two ways in: the
+  // toast's own action, and the Stop Conversion command, which reaches this process through
+  // LocalStorage and can be given any hotkey in Raycast's settings. The toast's close button is
+  // none of them — the API reports no callback for it, so it only hides the toast.
+  // The hint goes in the title: a no-view toast shows the title only, rendering neither the
+  // message nor an action on hover, which would leave every way to stop undiscoverable.
   let stopped = false;
   let skipped = 0;
-  const stopHint = selected.length > 1 ? "  ·  ⌘. to stop" : "";
+  const stopHint = selected.length > 1 ? "  ·  ⌘ + . to stop" : "";
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: `Converting…${stopHint}`,
@@ -56,9 +58,13 @@ export default async function Command() {
           }
         : undefined,
   });
+  await beginConversion();
 
   for (const [index, item] of selected.entries()) {
-    if (stopped) {
+    // The heartbeat tells the Stop Conversion command that there is something to stop.
+    await markAlive();
+    if (stopped || (await isStopRequested())) {
+      stopped = true;
       skipped = selected.length - index;
       break;
     }
@@ -130,6 +136,8 @@ export default async function Command() {
       await open(outputPath);
     }
   }
+
+  await endConversion();
 
   // Opening the results after a deliberate stop would work against what the user just asked for.
   if (!stopped && selected.length > 1 && prefs.openAfterConvertBatch && producedFiles.length > 0) {
